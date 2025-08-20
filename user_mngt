@@ -1,0 +1,77 @@
+#!/bin/bash
+# location: /usr/local/sbin
+# Enligt FHS 3.0  (https://refspecs.linuxfoundation.org/FHS_3.0/fhs/ch03s16.html)
+
+# Jag kör skriptet från repomappen (owner:amy).
+# Om jag istället hade lagt det i /usr/local/sbin med root:root och chmod 700,
+# skulle det ändå inte gå att köra utan root, så first kontrollen med id -u hade egentligen inte behövts
+
+# skripten måste köras som sudo
+if [ "$(id  -u)" -ne 0 ]; then
+  echo "This script must be run as root." >&2
+  exit 1
+fi
+
+# Kontrollera att exakt ETT argument skickas in
+if [ "$#" -ne 1 ]; then
+   echo "Error: You must  to provide only one fil as argument." >&2
+   exit 1
+fi
+
+
+REGULARFILE="$1"
+
+# Kontrollera att argumentet är en vanlig fil
+if [ ! -f "$REGULARFILE" ]; then
+  echo "Error: $REGULARFILE is not a valid  file." >&2
+  exit 1
+fi
+
+# Skriptet skriver till /var/log/user_mngt.log enligt instruktionerna (och FHS)
+# För att samtidigt uppfylla kravet på logfil.txt i projektmappen
+# har jag skapat en hard link  mellan dessa filer:
+# sudo ln /var/log/user_mngt.log ./loggfil.txt
+LOGFILE="/var/log/user_mngt.log"
+
+# kontrollerar inte om indatafilen har exakt fyra fält per rad  eller om den innehåller en header-rad
+# Enligt uppgiften förutsätts det att filen är korrekt formaterad
+# Därför gör jag ingen ytterligare validering avfiländelse , kolumnantal eller struktur
+
+# Läser rader fran filen
+while IFS=',' read -r fornamn efternamn losenord operation; do
+
+  USERNAME="${fornamn:0:3}${efternamn:0:3}"
+
+  if [ "$operation" = "add" ]; then
+    # Skapa user utan password  men med hemkatalog
+    if adduser --disabled-password --gecos "" "$USERNAME"> /dev/null 2>&1; then
+	echo "Add user $USERNAME"
+	echo "Add user $USERNAME" >> "$LOGFILE"
+
+	# BONUS DEL PASSWORD
+	# Jag sätter endast lösenord vid lyckad skapelse av ny användare
+	# Ingen kontroll görs om användaren redan finns (i så fall sker ingen lösenordsändring)
+	# chpasswd för att sätta lösenord i skriptform (user:password form) via stdin
+        # https://man7.org/linux/man-pages/man8/chpasswd.8.html
+	if echo "$USERNAME:$losenord" | chpasswd > /dev/null 2>&1; then
+	   echo "Setting password for user $USERNAME succeeded."
+	   echo "Setting password for user $USERNAME succeeded" >> "$LOGFILE"
+	else
+	   echo "Error: Failed to set a password for user $USERNAME." >&2
+	fi
+
+     else
+	echo "Error: Failed to create user $USERNAME." >&2
+     fi
+  # BONUS DEL-REMOVE
+  # Jag använder deluser (istället för userdel) eftersom skriptet redan bygger på adduser, vilket är specifikt för Ubuntu/Debian-baserade system.
+  elif  [ "$operation" = "remove" ]; then
+    # Ta bort user och sin katalog (om user finns)
+    if deluser --remove-home "$USERNAME" > /dev/null 2>&1; then
+	echo "Remove user $USERNAME"
+	echo "Remove user $USERNAME" >> "$LOGFILE"
+    else
+	echo "Error:Failed to delete user $USERNAME." >&2
+    fi
+  fi
+done <  "$REGULARFILE"
